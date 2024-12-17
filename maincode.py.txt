@@ -1,0 +1,319 @@
+import boto3
+from queue import Queue
+import tkinter as tk
+from tkinter import ttk, messagebox
+import psutil
+import json
+from PIL import Image, ImageTk
+import time
+import matplotlib.pyplot as plt
+import random  # For simulating cloud-only execution
+
+
+class WelcomeWindow:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Welcome to CloudOS Scheduler")
+        self.root.geometry("1000x700")
+
+        self.scheduling_algorithm = tk.StringVar()  # To store selected algorithm
+
+        # Show welcome page
+        self.show_welcome_page()
+
+    def set_background_image(self):
+        bg_image = Image.open("me.jpg")  # Replace with your welcome background image
+        bg_image = bg_image.resize((1000, 700), Image.Resampling.LANCZOS)
+
+        self.bg_image = ImageTk.PhotoImage(bg_image)
+
+        bg_label = tk.Label(self.root, image=self.bg_image)
+        bg_label.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+    def show_welcome_page(self):
+        # Clear the current window
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+        # Welcome Frame
+        welcome_frame = ttk.Frame(self.root)
+        welcome_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Display an image (can replace 'welcome_image.jpg' with your image file)
+        self.image = Image.open("cropped-giki-logo-updated.png")
+        self.image = self.image.resize((400, 300))  # Adjust size if needed
+        self.photo = ImageTk.PhotoImage(self.image)
+        label_image = ttk.Label(welcome_frame, image=self.photo)
+        label_image.pack(pady=20)
+
+        # Welcome text
+        welcome_text = ttk.Label(welcome_frame, text="Hi Ma'am, \n Welcome to CloudOS Scheduler!",
+                                 font=("Arial", 24))
+        welcome_text.pack(pady=10)
+
+        # Choose Scheduling Algorithm
+        scheduling_label = ttk.Label(welcome_frame, text="Select Scheduling Algorithm:")
+        scheduling_label.pack(pady=5)
+
+        scheduling_dropdown = ttk.Combobox(welcome_frame, textvariable=self.scheduling_algorithm,
+                                           values=["FIFO", "SJF", "RR"])
+        scheduling_dropdown.set("FIFO")  # Default option
+        scheduling_dropdown.pack(pady=10)
+
+        # Button to move to the main page
+        start_button = ttk.Button(welcome_frame, text="Let's Optimize", command=self.start_optimization)
+        start_button.pack(pady=20)
+
+    def start_optimization(self):
+        selected_algorithm = self.scheduling_algorithm.get()
+        print(f"Selected Scheduling Algorithm: {selected_algorithm}")
+
+        # Transition to the main page
+        self.create_main_page()
+
+    def create_main_page(self):
+        # Clear the current window
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+        main_app_root = VisualProcessResourceManagerWithCloud(self.root, self.scheduling_algorithm.get())
+
+
+class VisualProcessResourceManagerWithCloud:
+    def __init__(self, root, scheduling_algorithm):
+        self.root = root
+        self.scheduling_algorithm = scheduling_algorithm
+        self.root.title("Enhanced CloudOS Scheduler")
+        self.root.geometry("1000x700")
+
+        # Queue for local tasks
+        self.local_task_queue = Queue()
+        self.cloud_task_queue = Queue()
+
+        # AWS Clients
+        self.sqs_client = boto3.client('sqs', region_name='ap-south-1')  # Replace with your region
+        self.lambda_client = boto3.client('lambda', region_name='ap-south-1')
+        self.queue_url = "https://sqs.ap-south-1.amazonaws.com/010928187889/OSproject_task_queue"  # Replace with your queue URL
+
+        # Tabs
+        self.tab_control = ttk.Notebook(self.root)
+        self.process_manager_tab = ttk.Frame(self.tab_control)
+        self.queue_manager_tab = ttk.Frame(self.tab_control)
+
+        self.tab_control.add(self.process_manager_tab, text="Process Manager")
+        self.tab_control.add(self.queue_manager_tab, text="Queue Manager")
+        self.tab_control.pack(expand=1, fill="both")
+
+        self.create_process_manager_tab()
+        self.create_queue_manager_tab()
+
+        # Style customization
+        self.style = ttk.Style()
+        self.style.configure("Treeview.Heading", font=("Arial", 12, "bold"))
+        self.style.configure("Treeview", font=("Arial", 10))
+
+    def create_process_manager_tab(self):
+        # Process Manager
+        process_frame = ttk.LabelFrame(self.process_manager_tab, text="Processes")
+        process_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.process_tree = ttk.Treeview(process_frame, columns=("PID", "Name", "CPU", "Memory"), show="headings")
+        self.process_tree.heading("PID", text="PID")
+        self.process_tree.heading("Name", text="Name")
+        self.process_tree.heading("CPU", text="CPU (%)")
+        self.process_tree.heading("Memory", text="Memory (%)")
+        self.process_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        action_frame = ttk.Frame(self.process_manager_tab)
+        action_frame.pack(fill="x", padx=10, pady=5)
+
+        self.local_queue_counter = ttk.Label(action_frame, text="Local Queue: 0")
+        self.local_queue_counter.pack(side="left", padx=5)
+
+        self.cloud_queue_counter = ttk.Label(action_frame, text="Cloud Queue: 0")
+        self.cloud_queue_counter.pack(side="left", padx=5)
+
+        ttk.Button(action_frame, text="Refresh", command=self.refresh_process_list).pack(side="left", padx=5)
+        ttk.Button(action_frame, text="Queue Task Locally", command=self.queue_task_locally).pack(side="left", padx=5)
+        ttk.Button(action_frame, text="Send to Cloud", command=self.queue_task_to_cloud).pack(side="left", padx=5)
+        ttk.Button(action_frame, text="Kill Process", command=self.kill_process).pack(side="left", padx=5)
+        ttk.Button(action_frame, text="Run Benchmark", command=self.benchmark_system).pack(side="left", padx=5)
+
+    def refresh_process_list(self):
+        for row in self.process_tree.get_children():
+            self.process_tree.delete(row)
+
+        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+            try:
+                self.process_tree.insert('', 'end', values=(proc.info['pid'], proc.info['name'],
+                                                            proc.info['cpu_percent'], proc.info['memory_percent']))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+    def queue_task_locally(self):
+        selected_item = self.process_tree.focus()
+        if not selected_item:
+            messagebox.showwarning("No Selection", "Please select a process to queue.")
+            return
+
+        task = self.process_tree.item(selected_item)['values']
+        if self.scheduling_algorithm == "SJF":
+            self.local_task_queue.queue.appendleft(task)  # Shortest Job First
+        elif self.scheduling_algorithm == "RR":
+            self.local_task_queue.put(task)  # Round Robin (default behavior for FIFO queue)
+        else:
+            self.local_task_queue.put(task)  # FIFO as default
+
+        messagebox.showinfo("Task Queued", f"Task {task[1]} (PID: {task[0]}) added to the local queue.")
+        self.update_queue_counters()
+        self.refresh_queue_list()
+
+    def queue_task_to_cloud(self):
+        selected_item = self.process_tree.focus()
+        if not selected_item:
+            messagebox.showwarning("No Selection", "Please select a process to queue.")
+            return
+
+        task = self.process_tree.item(selected_item)['values']
+        task_data = {
+            "task_id": task[0],
+            "payload": task[1],
+        }
+
+        # Send task to SQS
+        response = self.sqs_client.send_message(
+            QueueUrl=self.queue_url,
+            MessageBody=json.dumps(task_data)
+        )
+        self.cloud_task_queue.put(task)
+        self.update_queue_counters()
+        messagebox.showinfo("Task Sent to Cloud", f"Task {task[1]} (PID: {task[0]}) sent to cloud. MessageID: {response['MessageId']}")
+
+    def update_queue_counters(self):
+        self.local_queue_counter.config(text=f"Local Queue: {self.local_task_queue.qsize()}")
+        self.cloud_queue_counter.config(text=f"Cloud Queue: {self.cloud_task_queue.qsize()}")
+
+    def kill_process(self):
+        selected_item = self.process_tree.focus()
+        if not selected_item:
+            messagebox.showwarning("No Selection", "Please select a process to kill.")
+            return
+
+        pid = self.process_tree.item(selected_item)['values'][0]
+        try:
+            proc = psutil.Process(pid)
+            proc.terminate()
+            messagebox.showinfo("Process Killed", f"Process {pid} terminated successfully.")
+            self.refresh_process_list()
+        except psutil.NoSuchProcess:
+            messagebox.showerror("Error", f"Process {pid} no longer exists.")
+
+    def create_queue_manager_tab(self):
+        # Queue Manager
+        queue_frame = ttk.LabelFrame(self.queue_manager_tab, text="Local Task Queue")
+        queue_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.queue_tree = ttk.Treeview(queue_frame, columns=("PID", "Name", "CPU", "Memory"), show="headings")
+        self.queue_tree.heading("PID", text="PID")
+        self.queue_tree.heading("Name", text="Name")
+        self.queue_tree.heading("CPU", text="CPU (%)")
+        self.queue_tree.heading("Memory", text="Memory (%)")
+        self.queue_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        action_frame = ttk.Frame(self.queue_manager_tab)
+        action_frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Button(action_frame, text="Execute Next Task Locally", command=self.execute_next_local_task).pack(side="left", padx=5)
+        ttk.Button(action_frame, text="Clear Queue", command=self.clear_local_queue).pack(side="left", padx=5)
+
+    def refresh_queue_list(self):
+        for row in self.queue_tree.get_children():
+            self.queue_tree.delete(row)
+
+        for idx, task in enumerate(list(self.local_task_queue.queue)):
+            self.queue_tree.insert('', 'end', values=task)
+
+    def execute_next_local_task(self):
+        if self.local_task_queue.empty():
+            messagebox.showinfo("Queue Empty", "No tasks in the local queue.")
+            return
+
+        task = self.local_task_queue.get()
+        pid = task[0]
+        try:
+            proc = psutil.Process(pid)
+            proc.terminate()
+            messagebox.showinfo("Task Executed Locally", f"Task {task[1]} (PID: {pid}) executed locally.")
+        except psutil.NoSuchProcess:
+            messagebox.showerror("Error", f"Process with PID {pid} no longer exists.")
+        self.update_queue_counters()
+        self.refresh_queue_list()
+
+    def clear_local_queue(self):
+        while not self.local_task_queue.empty():
+            self.local_task_queue.get()
+        messagebox.showinfo("Queue Cleared", "All tasks have been removed from the local queue.")
+        self.update_queue_counters()
+        self.refresh_queue_list()
+
+    def benchmark_system(self):
+        results = {
+            "CPU Load": {"Local": [], "Hybrid": [], "Cloud": []},
+            "Memory Usage": {"Local": [], "Hybrid": [], "Cloud": []},
+            "Task Completion Time": {"Local": [], "Hybrid": [], "Cloud": []}
+        }
+
+        # Simulate Local Execution
+        start_time = time.time()
+        for _ in range(5):  # Run a small loop to mimic tasks
+            cpu_load = psutil.cpu_percent(interval=0.1)
+            memory_usage = psutil.virtual_memory().percent
+            results["CPU Load"]["Local"].append(cpu_load)
+            results["Memory Usage"]["Local"].append(memory_usage)
+        results["Task Completion Time"]["Local"].append(time.time() - start_time)
+
+        # Simulate Hybrid Execution
+        start_time = time.time()
+        for _ in range(3):  # Some tasks are handled locally
+            cpu_load = psutil.cpu_percent(interval=0.1)
+            memory_usage = psutil.virtual_memory().percent
+            results["CPU Load"]["Hybrid"].append(cpu_load)
+            results["Memory Usage"]["Hybrid"].append(memory_usage)
+        for _ in range(2):  # Remaining tasks are simulated as offloaded
+            results["CPU Load"]["Hybrid"].append(random.uniform(20, 30))  # Simulate cloud load
+            results["Memory Usage"]["Hybrid"].append(random.uniform(10, 20))
+        results["Task Completion Time"]["Hybrid"].append(time.time() - start_time)
+
+        # Simulate Cloud Execution
+        start_time = time.time()
+        for _ in range(5):  # Simulate full cloud execution
+            results["CPU Load"]["Cloud"].append(random.uniform(10, 20))
+            results["Memory Usage"]["Cloud"].append(random.uniform(5, 15))
+        results["Task Completion Time"]["Cloud"].append(time.time() - start_time)
+
+        self.plot_benchmark_results(results)
+
+    def plot_benchmark_results(self, results):
+        fig, axes = plt.subplots(3, 1, figsize=(10, 15))
+
+        for i, metric in enumerate(["CPU Load", "Memory Usage", "Task Completion Time"]):
+            axes[i].boxplot(
+                [results[metric]["Local"], results[metric]["Hybrid"], results[metric]["Cloud"]],
+                labels=["Local", "Hybrid", "Cloud"],
+                patch_artist=True,  # For improved visuals
+                boxprops=dict(facecolor="lightblue", color="blue"),
+                medianprops=dict(color="red")
+            )
+            axes[i].set_title(metric, fontsize=14, fontweight="bold")
+            axes[i].set_ylabel(metric, fontsize=12)
+            axes[i].grid(True, linestyle="--", alpha=0.7)
+
+        plt.tight_layout()
+        plt.show()
+
+
+# Run the application
+if __name__ == "__main__":
+    root = tk.Tk()
+    welcome_app = WelcomeWindow(root)
+    root.mainloop()
