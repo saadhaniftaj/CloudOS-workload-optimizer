@@ -22,13 +22,16 @@ class WelcomeWindow:
         self.show_welcome_page()
 
     def set_background_image(self):
-        bg_image = Image.open("me.jpg")  # Replace with your welcome background image
-        bg_image = bg_image.resize((1000, 700), Image.Resampling.LANCZOS)
+        try:
+            bg_image = Image.open("me.jpg")  # Replace with your welcome background image
+            bg_image = bg_image.resize((1000, 700), Image.Resampling.LANCZOS)
 
-        self.bg_image = ImageTk.PhotoImage(bg_image)
+            self.bg_image = ImageTk.PhotoImage(bg_image)
 
-        bg_label = tk.Label(self.root, image=self.bg_image)
-        bg_label.place(relx=0, rely=0, relwidth=1, relheight=1)
+            bg_label = tk.Label(self.root, image=self.bg_image)
+            bg_label.place(relx=0, rely=0, relwidth=1, relheight=1)
+        except Exception as e:
+            print(f"Error loading background image: {e}")
 
     def show_welcome_page(self):
         # Clear the current window
@@ -40,11 +43,14 @@ class WelcomeWindow:
         welcome_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
         # Display an image (can replace 'welcome_image.jpg' with your image file)
-        self.image = Image.open("cropped-giki-logo-updated.png")
-        self.image = self.image.resize((400, 300))  # Adjust size if needed
-        self.photo = ImageTk.PhotoImage(self.image)
-        label_image = ttk.Label(welcome_frame, image=self.photo)
-        label_image.pack(pady=20)
+        try:
+            self.image = Image.open("cropped-giki-logo-updated.png")
+            self.image = self.image.resize((400, 300))  # Adjust size if needed
+            self.photo = ImageTk.PhotoImage(self.image)
+            label_image = ttk.Label(welcome_frame, image=self.photo)
+            label_image.pack(pady=20)
+        except Exception as e:
+            print(f"Error loading logo image: {e}")
 
         # Welcome text
         welcome_text = ttk.Label(welcome_frame, text="Hi Ma'am, \n Welcome to CloudOS Scheduler!",
@@ -304,16 +310,14 @@ class VisualProcessResourceManagerWithCloud:
                 boxprops=dict(facecolor="lightblue", color="blue"),
                 medianprops=dict(color="red")
             )
-            axes[i].set_title(metric, fontsize=14, fontweight="bold")
-            axes[i].set_ylabel(metric, fontsize=12)
-            axes[i].grid(True, linestyle="--", alpha=0.7)
+            axes[i].set_title(metric)
+            axes[i].set_ylabel(metric)
 
         plt.tight_layout()
         plt.show()
 
 
-# Run the application
 if __name__ == "__main__":
     root = tk.Tk()
-    welcome_app = WelcomeWindow(root)
+    app = WelcomeWindow(root)
     root.mainloop()
